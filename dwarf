@@ -39,8 +39,8 @@ class MainWindow(Gtk.Window):
 
         self.verbosity = verbosity
 
-        self.set_border_width(5)
-        self.set_default_size(650, 120)
+        self.set_border_width(10)
+        self.set_default_size(700, 200)
 
         self.connect("destroy", self.destroy_cb)
 
@@ -51,6 +51,8 @@ class MainWindow(Gtk.Window):
         }
 
         self.source_file = ""
+        self.programmer_name = ""
+        self.updating_power_switch = False
 
         # ---------------------------------------------------------
         # Main layout
@@ -58,74 +60,108 @@ class MainWindow(Gtk.Window):
 
         self.layout = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
-            spacing=5
+            spacing=10
         )
 
-        self.bar_layout = Gtk.Box(
+        # ROW 1: File selection & Programmer / Device Info
+        self.row1_layout = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=10
+        )
+
+        # ROW 2: Voltage & Target Power controls
+        self.row2_layout = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=10
+        )
+
+        # ROW 3: Actions
+        self.row3_layout = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL,
             spacing=5
         )
 
-        self.button_layout = Gtk.Box(
+        # ROW 4: Status Bar
+        self.status_layout = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL,
-            spacing=2
+            spacing=5
         )
 
         # ---------------------------------------------------------
+        # Row 1 Components
+        # ---------------------------------------------------------
+
         # Open HEX button
-        # ---------------------------------------------------------
-
         self.open_btn = Gtk.Button.new_from_icon_name(
             "document-open",
             Gtk.IconSize.BUTTON
         )
-
         self.open_btn.set_tooltip_text("Open HEX file")
         self.open_btn.connect("clicked", self.open_cb)
+        self.row1_layout.pack_start(self.open_btn, False, False, 0)
 
-        self.bar_layout.pack_start(
-            self.open_btn,
-            False,
-            False,
-            0
-        )
+        # Selected HEX File label
+        self.file_label = Gtk.Label(label="No file selected")
+        self.file_label.set_ellipsize(3) # Ellipsize at end
+        self.file_label_frame = Gtk.Frame(label="Selected HEX File")
+        self.file_label_frame.add(self.file_label)
+        self.row1_layout.pack_start(self.file_label_frame, True, True, 0)
 
-        # ---------------------------------------------------------
+        # Programmer label
+        self.programmer_label = Gtk.Label(label="(none)")
+        self.programmer_frame = Gtk.Frame(label="Programmer")
+        self.programmer_frame.add(self.programmer_label)
+        self.row1_layout.pack_start(self.programmer_frame, False, False, 0)
+
         # Device label
-        # ---------------------------------------------------------
-
         self.model = Gtk.Label(label="(none)")
         self.model.set_size_request(120, -1)
-
-        self.model_frame = Gtk.Frame()
+        self.model_frame = Gtk.Frame(label="Target PIC")
         self.model_frame.add(self.model)
+        self.row1_layout.pack_start(self.model_frame, False, False, 0)
 
-        self.bar_layout.pack_start(
-            self.model_frame,
-            False,
-            False,
-            0
-        )
-
-        # ---------------------------------------------------------
-        # Auto detect
-        # ---------------------------------------------------------
-
+        # Detect button
         self.auto_btn = self.make_image_button(
             "system-search",
-            "Detect PICkit 2",
+            "Detect PICkit & PIC",
             self.auto_cb
         )
-
-        self.button_layout.pack_start(
-            self.auto_btn,
-            False,
-            False,
-            0
-        )
+        self.row1_layout.pack_start(self.auto_btn, False, False, 0)
 
         # ---------------------------------------------------------
-        # Program
+        # Row 2 Components: Voltage & Target Power Controls
+        # ---------------------------------------------------------
+
+        self.voltage_frame = Gtk.Frame(label="Target Voltage & Power (VDD)")
+        voltage_inner = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=15
+        )
+        voltage_inner.set_border_width(5)
+
+        self.voltage_label = Gtk.Label(label="Voltage (V):")
+        voltage_inner.pack_start(self.voltage_label, False, False, 0)
+
+        # Adjustment: value, lower, upper, step_increment, page_increment, page_size
+        adj = Gtk.Adjustment(value=5.0, lower=1.8, upper=5.0, step_increment=0.1, page_increment=1.0, page_size=0)
+        self.voltage_spin = Gtk.SpinButton(adjustment=adj, climb_rate=0.1, digits=1)
+        self.voltage_spin.set_numeric(True)
+        self.voltage_spin.set_width_chars(5)
+        voltage_inner.pack_start(self.voltage_spin, False, False, 0)
+
+        self.power_label = Gtk.Label(label="Supply VDD:")
+        voltage_inner.pack_start(self.power_label, False, False, 0)
+
+        self.power_switch = Gtk.Switch()
+        self.power_switch.set_active(False)
+        self.power_switch.connect("notify::active", self.power_switch_cb)
+        voltage_inner.pack_start(self.power_switch, False, False, 0)
+
+        self.voltage_frame.add(voltage_inner)
+        self.row2_layout.pack_start(self.voltage_frame, True, True, 0)
+
+        # ---------------------------------------------------------
+        # Row 3 Components: Action Buttons
         # ---------------------------------------------------------
 
         self.program_btn = self.make_image_button(
@@ -133,145 +169,86 @@ class MainWindow(Gtk.Window):
             "Program PIC",
             self.program_cb
         )
-
         self.program_btn.set_sensitive(False)
+        self.row3_layout.pack_start(self.program_btn, True, True, 0)
 
-        self.button_layout.pack_start(
-            self.program_btn,
-            False,
-            False,
-            0
+        self.verify_btn = self.make_image_button(
+            "checkbox-checked",
+            "Verify PIC memory",
+            self.verify_cb
         )
-
-        # ---------------------------------------------------------
-        # Read
-        # ---------------------------------------------------------
+        self.verify_btn.set_sensitive(False)
+        self.row3_layout.pack_start(self.verify_btn, True, True, 0)
 
         self.read_btn = self.make_image_button(
             "document-save",
-            "Read PIC",
+            "Read PIC memory",
             self.read_cb
         )
-
         self.read_btn.set_sensitive(False)
+        self.row3_layout.pack_start(self.read_btn, True, True, 0)
 
-        self.button_layout.pack_start(
-            self.read_btn,
-            False,
-            False,
-            0
+        self.erase_btn = self.make_image_button(
+            "edit-clear",
+            "Erase PIC memory",
+            self.erase_cb
         )
+        self.erase_btn.set_sensitive(False)
+        self.row3_layout.pack_start(self.erase_btn, True, True, 0)
 
-        # ---------------------------------------------------------
-        # Run
-        # ---------------------------------------------------------
+        self.blank_btn = self.make_image_button(
+            "dialog-information",
+            "Blank Check PIC",
+            self.blank_cb
+        )
+        self.blank_btn.set_sensitive(False)
+        self.row3_layout.pack_start(self.blank_btn, True, True, 0)
 
         self.run_btn = self.make_image_button(
             "media-playback-start",
             "Run PIC",
             self.run_cb
         )
-
         self.run_btn.set_sensitive(False)
-
-        self.button_layout.pack_start(
-            self.run_btn,
-            False,
-            False,
-            0
-        )
-
-        # ---------------------------------------------------------
-        # Stop
-        # ---------------------------------------------------------
+        self.row3_layout.pack_start(self.run_btn, True, True, 0)
 
         self.stop_btn = self.make_image_button(
             "media-playback-stop",
             "Stop PIC",
             self.stop_cb
         )
-
         self.stop_btn.set_sensitive(False)
-
-        self.button_layout.pack_start(
-            self.stop_btn,
-            False,
-            False,
-            0
-        )
-
-        # ---------------------------------------------------------
-        # Exit
-        # ---------------------------------------------------------
+        self.row3_layout.pack_start(self.stop_btn, True, True, 0)
 
         self.exit_btn = Gtk.Button.new_from_icon_name(
             "application-exit",
             Gtk.IconSize.BUTTON
         )
-
         self.exit_btn.set_tooltip_text("Exit")
         self.exit_btn.connect("clicked", self.destroy_cb)
-
-        self.button_layout.pack_start(
-            self.exit_btn,
-            False,
-            False,
-            0
-        )
-
-        self.bar_layout.pack_end(
-            self.button_layout,
-            False,
-            False,
-            0
-        )
-
-        self.layout.pack_start(
-            self.bar_layout,
-            False,
-            False,
-            0
-        )
+        self.row3_layout.pack_start(self.exit_btn, False, False, 0)
 
         # ---------------------------------------------------------
-        # Status
+        # Row 4 Components: Status
         # ---------------------------------------------------------
-
-        self.status_layout = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            spacing=5
-        )
 
         self.status_label = Gtk.Label(label="Status: OK")
         self.status_label.set_xalign(0)
-
-        self.status_layout.pack_start(
-            self.status_label,
-            True,
-            True,
-            5
-        )
+        self.status_layout.pack_start(self.status_label, True, True, 5)
 
         self.status_btn = Gtk.Button(label="Details")
         self.status_btn.set_sensitive(False)
-        self.status_btn.connect(
-            "clicked",
-            self.status_popup_cb
-        )
+        self.status_btn.connect("clicked", self.status_popup_cb)
+        self.status_layout.pack_start(self.status_btn, False, False, 0)
 
-        self.status_layout.pack_start(
-            self.status_btn,
-            False,
-            False,
-            0
-        )
+        # ---------------------------------------------------------
+        # Add layouts to main Window
+        # ---------------------------------------------------------
 
-        self.layout.pack_start(
-            self.status_layout,
-            False,
-            False,
-            0
-        )
+        self.layout.pack_start(self.row1_layout, False, False, 0)
+        self.layout.pack_start(self.row2_layout, False, False, 0)
+        self.layout.pack_start(self.row3_layout, False, False, 0)
+        self.layout.pack_start(self.status_layout, False, False, 0)
 
         self.add(self.layout)
 
@@ -289,37 +266,22 @@ class MainWindow(Gtk.Window):
         # Try to connect automatically
         self.prog.connect()
 
-    # -------------------------------------------------------------
-    # GUI helpers
-    # -------------------------------------------------------------
-
     def make_image_button(self, icon_name, tooltip, callback):
         button = Gtk.Button.new_from_icon_name(
             icon_name,
             Gtk.IconSize.BUTTON
         )
-
         button.set_tooltip_text(tooltip)
         button.connect("clicked", callback)
-
         return button
 
     def destroy_cb(self, *args):
         Gtk.main_quit()
 
-    # -------------------------------------------------------------
-    # PICkit callbacks
-    # -------------------------------------------------------------
-
     def auto_cb(self, *args):
         self.prog.connect()
 
-    # -------------------------------------------------------------
-    # File selection
-    # -------------------------------------------------------------
-
     def open_cb(self, *args):
-
         dialog = Gtk.FileChooserDialog(
             title="Open HEX file",
             parent=self,
@@ -333,44 +295,34 @@ class MainWindow(Gtk.Window):
             Gtk.ResponseType.ACCEPT
         )
 
-        # HEX filter
         hex_filter = Gtk.FileFilter()
         hex_filter.set_name("HEX files")
         hex_filter.add_pattern("*.hex")
         hex_filter.add_pattern("*.HEX")
-
         dialog.add_filter(hex_filter)
 
-        # All files
         all_filter = Gtk.FileFilter()
         all_filter.set_name("All files")
         all_filter.add_pattern("*")
-
         dialog.add_filter(all_filter)
 
         if self.source_file:
             folder = os.path.dirname(self.source_file)
-
             if os.path.isdir(folder):
                 dialog.set_current_folder(folder)
         else:
-            dialog.set_current_folder(
-                os.path.expanduser("~")
-            )
+            dialog.set_current_folder(os.path.expanduser("~"))
 
         response = dialog.run()
 
         if response == Gtk.ResponseType.ACCEPT:
-
             filename = dialog.get_filename()
-
             if filename:
                 self.set_file(filename)
 
         dialog.destroy()
 
     def set_file(self, filename):
-
         if not os.path.isfile(filename):
             self.status(
                 "HEX file not found",
@@ -380,16 +332,13 @@ class MainWindow(Gtk.Window):
             return
 
         self.source_file = os.path.abspath(filename)
-
         self.ready["file"] = True
 
-        basename = os.path.basename(
-            self.source_file
-        )
+        basename = os.path.basename(self.source_file)
+        self.file_label.set_text(basename)
+        self.file_label.set_tooltip_text(self.source_file)
 
-        self.set_title(
-            f"Dwarf {VERSION}: {basename}"
-        )
+        self.set_title(f"Dwarf {VERSION}: {basename}")
 
         self.status(
             f"HEX selected: {basename}",
@@ -397,54 +346,36 @@ class MainWindow(Gtk.Window):
             "green"
         )
 
-        self.update_active(
-            "file",
-            True
-        )
+        self.update_active("file", True)
 
         if self.verbosity:
-            print(
-                f"File chosen: {self.source_file}"
-            )
-
-    # -------------------------------------------------------------
-    # Program
-    # -------------------------------------------------------------
+            print(f"File chosen: {self.source_file}")
 
     def program_cb(self, *args):
-
         if not self.source_file:
-            self.status(
-                "No HEX file selected",
-                "",
-                "red"
-            )
+            self.status("No HEX file selected", "", "red")
             return
 
         if not os.path.isfile(self.source_file):
-            self.status(
-                "HEX file not found",
-                self.source_file,
-                "red"
-            )
-
-            self.update_active(
-                "file",
-                False
-            )
-
+            self.status("HEX file not found", self.source_file, "red")
+            self.update_active("file", False)
             return
 
-        self.prog.program(
-            self.source_file
-        )
+        self.prog.program(self.source_file)
 
-    # -------------------------------------------------------------
-    # Read PIC
-    # -------------------------------------------------------------
+    def verify_cb(self, *args):
+        if not self.source_file:
+            self.status("No HEX file selected", "", "red")
+            return
+
+        if not os.path.isfile(self.source_file):
+            self.status("HEX file not found", self.source_file, "red")
+            self.update_active("file", False)
+            return
+
+        self.prog.verify(self.source_file)
 
     def read_cb(self, *args):
-
         dialog = Gtk.FileChooserDialog(
             title="Save HEX dump to...",
             parent=self,
@@ -463,52 +394,42 @@ class MainWindow(Gtk.Window):
         response = dialog.run()
 
         if response == Gtk.ResponseType.ACCEPT:
-
             filename = dialog.get_filename()
-
             if filename:
-                self.prog.read_device(
-                    filename
-                )
+                self.prog.read_device(filename)
 
         dialog.destroy()
 
-    # -------------------------------------------------------------
-    # Run PIC
-    # -------------------------------------------------------------
+    def erase_cb(self, *args):
+        self.prog.erase()
+
+    def blank_cb(self, *args):
+        self.prog.blank_check()
 
     def run_cb(self, *args):
         self.prog.run()
 
-    # -------------------------------------------------------------
-    # Stop PIC
-    # -------------------------------------------------------------
-
     def stop_cb(self, *args):
         self.prog.stop()
 
-    # -------------------------------------------------------------
-    # Status popup
-    # -------------------------------------------------------------
+    def get_voltage(self):
+        return f"{self.voltage_spin.get_value():.1f}"
+
+    def is_target_power_on(self):
+        return self.power_switch.get_active()
+
+    def power_switch_cb(self, switch, gparamspec):
+        if self.updating_power_switch:
+            return
+        is_active = switch.get_active()
+        self.prog.set_target_power(is_active)
 
     def status_popup_cb(self, *args):
-
-        popup = StatusPopup(
-            self.status_msg
-        )
-
+        popup = StatusPopup(self.status_msg)
         popup.show_all()
 
-    # -------------------------------------------------------------
-    # Status handling
-    # -------------------------------------------------------------
-
     def status(self, msg, details="", colour="green"):
-
-        self.status_label.set_text(
-            "Status: " + msg
-        )
-
+        self.status_label.set_text("Status: " + msg)
         self.status_msg = details
 
         colors = {
@@ -518,7 +439,6 @@ class MainWindow(Gtk.Window):
         }
 
         css = Gtk.CssProvider()
-
         css_data = f"""
         label {{
             background-color: {colors.get(colour, "#ffffff")};
@@ -526,50 +446,33 @@ class MainWindow(Gtk.Window):
         }}
         """
 
-        css.load_from_data(
-            css_data.encode()
-        )
-
+        css.load_from_data(css_data.encode())
         self.status_label.get_style_context().add_provider(
             css,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
-        self.status_btn.set_sensitive(
-            bool(details)
-        )
+        self.status_btn.set_sensitive(bool(details))
 
     def update_active(self, reason, value):
-
         self.ready[reason] = value
 
         device_ready = self.ready["device"]
         file_ready = self.ready["file"]
 
-        self.program_btn.set_sensitive(
-            device_ready and file_ready
-        )
-
-        self.read_btn.set_sensitive(
-            device_ready
-        )
-
-        self.run_btn.set_sensitive(
-            device_ready
-        )
-
-        self.stop_btn.set_sensitive(
-            device_ready
-        )
+        self.program_btn.set_sensitive(device_ready and file_ready)
+        self.verify_btn.set_sensitive(device_ready and file_ready)
+        self.read_btn.set_sensitive(device_ready)
+        self.erase_btn.set_sensitive(device_ready)
+        self.blank_btn.set_sensitive(device_ready)
+        self.run_btn.set_sensitive(device_ready)
+        self.stop_btn.set_sensitive(device_ready)
 
 
 class StatusPopup(Gtk.Window):
 
     def __init__(self, message):
-
-        super().__init__(
-            title="Dwarf: Status Messages"
-        )
+        super().__init__(title="Dwarf: Status Messages")
 
         self.set_border_width(10)
         self.set_default_size(500, 250)
@@ -580,210 +483,161 @@ class StatusPopup(Gtk.Window):
         )
 
         text_view = Gtk.TextView()
-
         text_view.set_editable(False)
         text_view.set_cursor_visible(False)
-        text_view.set_wrap_mode(
-            Gtk.WrapMode.WORD
-        )
+        text_view.set_wrap_mode(Gtk.WrapMode.WORD)
 
         buffer = text_view.get_buffer()
-
-        buffer.set_text(
-            message or "(no details)"
-        )
+        buffer.set_text(message or "(no details)")
 
         scroll = Gtk.ScrolledWindow()
-
         scroll.set_policy(
             Gtk.PolicyType.AUTOMATIC,
             Gtk.PolicyType.AUTOMATIC
         )
-
         scroll.add(text_view)
 
-        layout.pack_start(
-            scroll,
-            True,
-            True,
-            0
-        )
+        layout.pack_start(scroll, True, True, 0)
 
-        close_btn = Gtk.Button(
-            label="Close"
-        )
+        close_btn = Gtk.Button(label="Close")
+        close_btn.connect("clicked", lambda *_: self.destroy())
 
-        close_btn.connect(
-            "clicked",
-            lambda *_: self.destroy()
-        )
-
-        layout.pack_end(
-            close_btn,
-            False,
-            False,
-            0
-        )
-
+        layout.pack_end(close_btn, False, False, 0)
         self.add(layout)
 
 
 class PicKit:
 
     def __init__(self, parent, verbosity=False):
-
         self.verbosity = verbosity
         self.cmd = PK2CMD
         self.parent = parent
         self.device = ""
 
-    # -------------------------------------------------------------
-    # Connect / detect
-    # -------------------------------------------------------------
+    def detect_programmer(self):
+        """Scans for connected PICkit programmers and returns the name/type."""
+        if shutil.which(self.cmd) is None:
+            return "No pk2cmd"
+
+        output = self._run_command(["-S"])
+
+        if "No PICkit" in output or "not found" in output:
+            return None
+
+        # Parse the programmer name
+        for line in output.splitlines():
+            if "Unit type:" in line:
+                return line.split(":", 1)[1].strip()
+            if "PICkit 3" in line:
+                return "PICkit 3"
+            if "PICkit 2" in line:
+                return "PICkit 2"
+            if "PKOB" in line:
+                return "PKOB"
+
+        if "Operation Succeeded" in output:
+            return "PICkit (Detected)"
+
+        return None
 
     def connect(self):
-
-        # Check whether pk2cmd exists
         if shutil.which(self.cmd) is None:
-
             self.device = ""
-
-            self.parent.model.set_text(
-                "(none)"
-            )
-
+            self.parent.programmer_name = ""
+            self.parent.programmer_label.set_text("(none)")
+            self.parent.model.set_text("(none)")
             self.parent.status(
                 "pk2cmd not installed!",
                 f"Could not find '{self.cmd}' in PATH.",
                 "red"
             )
-
-            self.parent.update_active(
-                "device",
-                False
-            )
-
+            self.parent.update_active("device", False)
             self.show_error(
                 "pk2cmd Required!",
-                "The pk2cmd command line program "
-                "could not be found.\n\n"
-                "Install pk2cmd and make sure it is "
-                "available in PATH."
+                "The pk2cmd command line program could not be found.\n\n"
+                "Install pk2cmd and make sure it is available in PATH."
             )
-
             return False
 
-        output = self._run_command(
-            ["-P"]
-        )
-
-        if "No PICkit 2 found." in output:
-
+        prog_type = self.detect_programmer()
+        if not prog_type:
             self.device = ""
-
-            self.parent.model.set_text(
-                "(none)"
-            )
-
+            self.parent.programmer_name = ""
+            self.parent.programmer_label.set_text("(none)")
+            self.parent.model.set_text("(none)")
             self.parent.status(
-                "PICkit 2 not found",
+                "Programmer not found",
+                "Please connect a PICkit 2/3 or PKOB programmer.",
+                "yellow"
+            )
+            self.parent.update_active("device", False)
+            return False
+
+        self.parent.programmer_name = prog_type
+        self.parent.programmer_label.set_text(prog_type)
+
+        opts = ["-P"]
+        voltage_val = self.parent.get_voltage()
+        if voltage_val:
+            opts.append(f"-A{voltage_val}")
+
+        if self.parent.is_target_power_on():
+            opts.append("-T")
+
+        output = self._run_command(opts)
+
+        if "No PICkit" in output or "not found" in output:
+            self.device = ""
+            self.parent.model.set_text("(none)")
+            self.parent.status(
+                "Programmer error",
                 output,
                 "yellow"
             )
-
-            self.parent.update_active(
-                "device",
-                False
-            )
-
+            self.parent.update_active("device", False)
             return False
 
-        if "No known part found" in output:
-
+        if "No known part found" in output or ("Device ID" in output and "not found" in output):
             self.device = ""
-
-            self.parent.model.set_text(
-                "(none)"
-            )
-
+            self.parent.model.set_text("(none)")
             self.parent.status(
                 "No PIC found",
-                output,
+                output + "\n\n(Ensure target board is powered or VDD is enabled)",
                 "yellow"
             )
-
-            self.parent.update_active(
-                "device",
-                False
-            )
-
+            self.parent.update_active("device", False)
             return False
 
-        # ---------------------------------------------------------
-        # Parse detected PIC
-        # ---------------------------------------------------------
-
         marker = "Found part "
-
         if marker in output:
-
             start = output.find(marker) + len(marker)
-
-            end = output.find(
-                ".",
-                start
-            )
-
+            end = output.find(".", start)
             if end == -1:
                 device = output[start:].strip()
             else:
                 device = output[start:end].strip()
 
             self.device = device
-
-            self.parent.model.set_text(
-                device
-            )
-
+            self.parent.model.set_text(device)
             self.parent.status(
-                f"Detected {device}",
+                f"Detected {device} ({prog_type})",
                 output,
                 "green"
             )
-
-            self.parent.update_active(
-                "device",
-                True
-            )
-
+            self.parent.update_active("device", True)
             return True
 
-        # Unknown output
         self.device = ""
-
-        self.parent.model.set_text(
-            "(unknown)"
-        )
-
+        self.parent.model.set_text("(unknown)")
         self.parent.status(
             "Could not identify PIC",
             output,
             "yellow"
         )
-
-        self.parent.update_active(
-            "device",
-            False
-        )
-
+        self.parent.update_active("device", False)
         return False
 
-    # -------------------------------------------------------------
-    # Error dialog
-    # -------------------------------------------------------------
-
     def show_error(self, title, message):
-
         dialog = Gtk.MessageDialog(
             transient_for=self.parent,
             flags=Gtk.DialogFlags.MODAL,
@@ -791,26 +645,32 @@ class PicKit:
             buttons=Gtk.ButtonsType.CLOSE,
             text=title
         )
-
-        dialog.format_secondary_text(
-            message
-        )
-
+        dialog.format_secondary_text(message)
         dialog.run()
         dialog.destroy()
 
-    # -------------------------------------------------------------
-    # Program PIC
-    # -------------------------------------------------------------
+    def set_target_power(self, is_on):
+        opts = []
+        if self.device:
+            opts.append("-P" + self.device)
+            
+        voltage_val = self.parent.get_voltage()
+        if voltage_val:
+            opts.append(f"-A{voltage_val}")
+            
+        if is_on:
+            opts.append("-T")
+            
+        output = self._run_command(opts)
+        
+        if is_on:
+            self.parent.status("Target power ON", output, "green")
+        else:
+            self.parent.status("Target power OFF", output, "green")
 
     def program(self, hexfile):
-
         if not self.device:
-            self.parent.status(
-                "No PIC detected",
-                "",
-                "red"
-            )
+            self.parent.status("No PIC detected", "", "red")
             return
 
         opts = [
@@ -819,38 +679,48 @@ class PicKit:
             "-M"
         ]
 
-        output = self._run_command(
-            opts
-        )
+        voltage_val = self.parent.get_voltage()
+        if voltage_val:
+            opts.append(f"-A{voltage_val}")
+            
+        if self.parent.is_target_power_on():
+            opts.append("-T")
+
+        output = self._run_command(opts)
 
         if "Program Succeeded" in output:
-
-            self.parent.status(
-                "Program Succeeded",
-                output,
-                "green"
-            )
-
+            self.parent.status("Program Succeeded", output, "green")
         else:
+            self.parent.status("Program Failed", output, "red")
 
-            self.parent.status(
-                "Program Failed",
-                output,
-                "red"
-            )
+    def verify(self, hexfile):
+        if not self.device:
+            self.parent.status("No PIC detected", "", "red")
+            return
 
-    # -------------------------------------------------------------
-    # Read PIC
-    # -------------------------------------------------------------
+        opts = [
+            "-P" + self.device,
+            "-F" + hexfile,
+            "-Y"
+        ]
+
+        voltage_val = self.parent.get_voltage()
+        if voltage_val:
+            opts.append(f"-A{voltage_val}")
+            
+        if self.parent.is_target_power_on():
+            opts.append("-T")
+
+        output = self._run_command(opts)
+
+        if "Verify Succeeded" in output or "Operation Succeeded" in output:
+            self.parent.status("Verify Succeeded", output, "green")
+        else:
+            self.parent.status("Verify Failed", output, "red")
 
     def read_device(self, hexfile):
-
         if not self.device:
-            self.parent.status(
-                "No PIC detected",
-                "",
-                "red"
-            )
+            self.parent.status("No PIC detected", "", "red")
             return
 
         opts = [
@@ -858,22 +728,65 @@ class PicKit:
             "-GF" + hexfile
         ]
 
-        output = self._run_command(
-            opts
-        )
+        voltage_val = self.parent.get_voltage()
+        if voltage_val:
+            opts.append(f"-A{voltage_val}")
+            
+        if self.parent.is_target_power_on():
+            opts.append("-T")
 
-        self.parent.status(
-            "PIC read complete",
-            output,
-            "green"
-        )
+        output = self._run_command(opts)
+        self.parent.status("PIC read complete", output, "green")
 
-    # -------------------------------------------------------------
-    # Run PIC
-    # -------------------------------------------------------------
+    def erase(self):
+        if not self.device:
+            self.parent.status("No PIC detected", "", "red")
+            return
+
+        opts = [
+            "-P" + self.device,
+            "-E"
+        ]
+
+        voltage_val = self.parent.get_voltage()
+        if voltage_val:
+            opts.append(f"-A{voltage_val}")
+            
+        if self.parent.is_target_power_on():
+            opts.append("-T")
+
+        output = self._run_command(opts)
+
+        if "Erase Succeeded" in output or "Operation Succeeded" in output:
+            self.parent.status("Erase Succeeded", output, "green")
+        else:
+            self.parent.status("Erase Failed", output, "red")
+
+    def blank_check(self):
+        if not self.device:
+            self.parent.status("No PIC detected", "", "red")
+            return
+
+        opts = [
+            "-P" + self.device,
+            "-C"
+        ]
+
+        voltage_val = self.parent.get_voltage()
+        if voltage_val:
+            opts.append(f"-A{voltage_val}")
+            
+        if self.parent.is_target_power_on():
+            opts.append("-T")
+
+        output = self._run_command(opts)
+
+        if "Device is Blank" in output or "Blank Check Succeeded" in output or "Operation Succeeded" in output:
+            self.parent.status("Device is Blank", output, "green")
+        else:
+            self.parent.status("Device is NOT Blank", output, "red")
 
     def run(self):
-
         if not self.device:
             return
 
@@ -883,22 +796,19 @@ class PicKit:
             "-T"
         ]
 
-        output = self._run_command(
-            opts
-        )
+        voltage_val = self.parent.get_voltage()
+        if voltage_val:
+            opts.append(f"-A{voltage_val}")
 
-        self.parent.status(
-            "PIC running",
-            output,
-            "green"
-        )
-
-    # -------------------------------------------------------------
-    # Stop PIC
-    # -------------------------------------------------------------
+        output = self._run_command(opts)
+        self.parent.status("PIC running", output, "green")
+        
+        # Sync switch to reflect that VDD is ON
+        self.parent.updating_power_switch = True
+        self.parent.power_switch.set_active(True)
+        self.parent.updating_power_switch = False
 
     def stop(self):
-
         if not self.device:
             return
 
@@ -906,44 +816,33 @@ class PicKit:
             "-P" + self.device
         ]
 
-        output = self._run_command(
-            opts
-        )
+        voltage_val = self.parent.get_voltage()
+        if voltage_val:
+            opts.append(f"-A{voltage_val}")
 
-        self.parent.status(
-            "PIC stopped",
-            output,
-            "green"
-        )
-
-    # -------------------------------------------------------------
-    # Execute pk2cmd
-    # -------------------------------------------------------------
+        output = self._run_command(opts)
+        self.parent.status("PIC stopped", output, "green")
+        
+        # Sync switch to reflect that VDD is OFF
+        self.parent.updating_power_switch = True
+        self.parent.power_switch.set_active(False)
+        self.parent.updating_power_switch = False
 
     def _run_command(self, args):
-
-        command = [
-            self.cmd
-        ] + args
+        command = [self.cmd] + args
 
         if self.verbosity:
-            print(
-                "$ " + " ".join(command)
-            )
+            print("$ " + " ".join(command))
 
         try:
-
             process = Popen(
                 command,
                 stdout=PIPE,
                 stderr=PIPE,
                 text=True
             )
-
             stdout, stderr = process.communicate()
-
             output = stdout
-
             if stderr:
                 output += stderr
 
@@ -953,18 +852,9 @@ class PicKit:
             return output
 
         except FileNotFoundError:
-
-            return (
-                f"Error: {self.cmd} "
-                "not found."
-            )
-
+            return f"Error: {self.cmd} not found."
         except Exception as exc:
-
-            return (
-                f"Error executing pk2cmd: "
-                f"{exc}"
-            )
+            return f"Error executing {self.cmd}: {exc}"
 
 
 def usage():
