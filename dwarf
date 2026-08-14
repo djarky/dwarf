@@ -31,6 +31,87 @@ APP_FOLDER = os.path.dirname(os.path.abspath(__file__))
 PK2CMD = "pk2cmd"
 
 
+def parse_intel_hex(filepath):
+    """Parses an Intel HEX file into a dictionary of physical_address -> byte."""
+    memory = {}
+    upper_address = 0
+    try:
+        with open(filepath, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line.startswith(':'):
+                    continue
+                try:
+                    byte_count = int(line[1:3], 16)
+                    addr = int(line[3:7], 16)
+                    record_type = int(line[7:9], 16)
+                    data_str = line[9:9+byte_count*2]
+                    
+                    if record_type == 0:  # Data record
+                        phys_addr = (upper_address << 16) + addr
+                        for i in range(byte_count):
+                            val = int(data_str[i*2:(i+1)*2], 16)
+                            memory[phys_addr + i] = val
+                    elif record_type == 1:  # EOF
+                        break
+                    elif record_type == 2:  # Extended Segment Address
+                        upper_address = int(data_str, 16) << 4
+                    elif record_type == 4:  # Extended Linear Address
+                        upper_address = int(data_str, 16)
+                except ValueError:
+                    continue
+    except Exception as exc:
+        print(f"Error parsing hex file: {exc}")
+    return memory
+
+
+def get_address_info(addr):
+    """Maps physical byte address to name and tag style class."""
+    if 0x0000 <= addr <= 0x0007:
+        return "Reset Vector", "reset"
+    elif 0x0008 <= addr <= 0x001F:
+        return "Interrupt Vector", "interrupt"
+    # PIC12/PIC16 ranges (word address * 2)
+    elif 0x4000 <= addr <= 0x4007:
+        return "User ID", "userid"
+    elif 0x4008 <= addr <= 0x400D:
+        return "Device ID", "userid"
+    elif 0x400E <= addr <= 0x401F:
+        return "Config Words", "config"
+    elif 0x4200 <= addr <= 0x4FFF:
+        return "EEPROM", "eeprom"
+    # PIC18 ranges
+    elif 0x200000 <= addr <= 0x20000F:
+        return "User ID", "userid"
+    elif 0x300000 <= addr <= 0x30000F:
+        return "Config Bits", "config"
+    elif 0x3FFFFE <= addr <= 0x3FFFFF:
+        return "Device ID", "userid"
+    elif 0xF00000 <= addr <= 0xF00FFF:
+        return "EEPROM", "eeprom"
+    return None, None
+
+
+def detect_dark_theme():
+    """Returns True if the current GTK theme appears to be dark."""
+    settings = Gtk.Settings.get_default()
+    if settings:
+        prefer_dark = settings.get_property("gtk-application-prefer-dark-theme")
+        if prefer_dark:
+            return True
+        theme_name = settings.get_property("gtk-theme-name") or ""
+        if "dark" in theme_name.lower():
+            return True
+    # Fall back to sampling the default window background color
+    dummy = Gtk.Window()
+    style = dummy.get_style_context()
+    bg = style.get_background_color(Gtk.StateFlags.NORMAL)
+    dummy.destroy()
+    # If luminance is low, it's a dark theme
+    luminance = 0.299 * bg.red + 0.587 * bg.green + 0.114 * bg.blue
+    return luminance < 0.5
+
+
 class MainWindow(Gtk.Window):
     """Main Dwarf window."""
 
@@ -38,9 +119,10 @@ class MainWindow(Gtk.Window):
         super().__init__(title=f"Dwarf {VERSION}")
 
         self.verbosity = verbosity
+        self.is_dark = detect_dark_theme()
 
         self.set_border_width(10)
-        self.set_default_size(700, 200)
+        self.set_default_size(750, 600)
 
         self.connect("destroy", self.destroy_cb)
 
@@ -53,6 +135,7 @@ class MainWindow(Gtk.Window):
         self.source_file = ""
         self.programmer_name = ""
         self.updating_power_switch = False
+        self.hex_addr_map = {}  # buffer_offset -> physical_address
 
         # ---------------------------------------------------------
         # Main layout
@@ -92,12 +175,10 @@ class MainWindow(Gtk.Window):
         # ---------------------------------------------------------
 
         # Open HEX button
-        self.open_btn = Gtk.Button.new_from_icon_name(
-            "document-open",
-            Gtk.IconSize.BUTTON
+        self.open_btn = self.make_image_button(
+            "document-open-symbolic", "Open",
+            "Open HEX file", self.open_cb
         )
-        self.open_btn.set_tooltip_text("Open HEX file")
-        self.open_btn.connect("clicked", self.open_cb)
         self.row1_layout.pack_start(self.open_btn, False, False, 0)
 
         # Selected HEX File label
@@ -122,9 +203,8 @@ class MainWindow(Gtk.Window):
 
         # Detect button
         self.auto_btn = self.make_image_button(
-            "system-search",
-            "Detect PICkit & PIC",
-            self.auto_cb
+            "edit-find-symbolic", "Detect",
+            "Detect PICkit & PIC", self.auto_cb
         )
         self.row1_layout.pack_start(self.auto_btn, False, False, 0)
 
@@ -165,67 +245,58 @@ class MainWindow(Gtk.Window):
         # ---------------------------------------------------------
 
         self.program_btn = self.make_image_button(
-            "media-floppy",
-            "Program PIC",
-            self.program_cb
+            "go-up-symbolic", "Write",
+            "Program PIC", self.program_cb
         )
         self.program_btn.set_sensitive(False)
         self.row3_layout.pack_start(self.program_btn, True, True, 0)
 
         self.verify_btn = self.make_image_button(
-            "checkbox-checked",
-            "Verify PIC memory",
-            self.verify_cb
+            "emblem-ok-symbolic", "Verify",
+            "Verify PIC memory", self.verify_cb
         )
         self.verify_btn.set_sensitive(False)
         self.row3_layout.pack_start(self.verify_btn, True, True, 0)
 
         self.read_btn = self.make_image_button(
-            "document-save",
-            "Read PIC memory",
-            self.read_cb
+            "go-down-symbolic", "Read",
+            "Read PIC memory", self.read_cb
         )
         self.read_btn.set_sensitive(False)
         self.row3_layout.pack_start(self.read_btn, True, True, 0)
 
         self.erase_btn = self.make_image_button(
-            "edit-clear",
-            "Erase PIC memory",
-            self.erase_cb
+            "edit-delete-symbolic", "Erase",
+            "Erase PIC memory", self.erase_cb
         )
         self.erase_btn.set_sensitive(False)
         self.row3_layout.pack_start(self.erase_btn, True, True, 0)
 
         self.blank_btn = self.make_image_button(
-            "dialog-information",
-            "Blank Check PIC",
-            self.blank_cb
+            "dialog-information-symbolic", "Blank?",
+            "Blank Check PIC", self.blank_cb
         )
         self.blank_btn.set_sensitive(False)
         self.row3_layout.pack_start(self.blank_btn, True, True, 0)
 
         self.run_btn = self.make_image_button(
-            "media-playback-start",
-            "Run PIC",
-            self.run_cb
+            "media-playback-start-symbolic", "Run",
+            "Run PIC", self.run_cb
         )
         self.run_btn.set_sensitive(False)
         self.row3_layout.pack_start(self.run_btn, True, True, 0)
 
         self.stop_btn = self.make_image_button(
-            "media-playback-stop",
-            "Stop PIC",
-            self.stop_cb
+            "media-playback-stop-symbolic", "Stop",
+            "Stop PIC", self.stop_cb
         )
         self.stop_btn.set_sensitive(False)
         self.row3_layout.pack_start(self.stop_btn, True, True, 0)
 
-        self.exit_btn = Gtk.Button.new_from_icon_name(
-            "application-exit",
-            Gtk.IconSize.BUTTON
+        self.exit_btn = self.make_image_button(
+            "application-exit-symbolic", "Exit",
+            "Exit", self.destroy_cb
         )
-        self.exit_btn.set_tooltip_text("Exit")
-        self.exit_btn.connect("clicked", self.destroy_cb)
         self.row3_layout.pack_start(self.exit_btn, False, False, 0)
 
         # ---------------------------------------------------------
@@ -242,13 +313,103 @@ class MainWindow(Gtk.Window):
         self.status_layout.pack_start(self.status_btn, False, False, 0)
 
         # ---------------------------------------------------------
+        # HEX Viewer Components
+        # ---------------------------------------------------------
+
+        self.hex_frame = Gtk.Frame(label="HEX File Viewer")
+        hex_container = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=5
+        )
+        hex_container.set_border_width(5)
+
+        # Text View and Scroll window
+        self.hex_scroll = Gtk.ScrolledWindow()
+        self.hex_scroll.set_policy(
+            Gtk.PolicyType.AUTOMATIC,
+            Gtk.PolicyType.AUTOMATIC
+        )
+        self.hex_scroll.set_min_content_height(250)
+
+        self.hex_view = Gtk.TextView()
+        self.hex_view.set_editable(False)
+        self.hex_view.set_cursor_visible(False)
+        self.hex_view.set_monospace(True)
+        self.hex_view.set_has_tooltip(True)
+        self.hex_view.connect("query-tooltip", self.hex_query_tooltip_cb)
+
+        self.hex_view_buffer = self.hex_view.get_buffer()
+        self.hex_view_buffer.set_text("No HEX file loaded.")
+
+        # Register hex viewer tags with theme-aware colors
+        tag_table = self.hex_view_buffer.get_tag_table()
+        if self.is_dark:
+            tags = {
+                "reset":     {"background": "#5dade2", "foreground": "#1a1a2e", "weight": 800},
+                "interrupt": {"background": "#bb8fce", "foreground": "#1a1a2e", "weight": 800},
+                "userid":    {"background": "#58d68d", "foreground": "#1a1a2e", "weight": 800},
+                "config":    {"background": "#f0b27a", "foreground": "#1a1a2e", "weight": 800},
+                "eeprom":    {"background": "#f9e79f", "foreground": "#1a1a2e", "weight": 800},
+                "comment":   {"foreground": "#aab7b8"},
+                "gap_style": {"foreground": "#7f8c8d", "weight": 800}
+            }
+        else:
+            tags = {
+                "reset":     {"background": "#2c3e50", "foreground": "#ffffff", "weight": 800},
+                "interrupt": {"background": "#8e44ad", "foreground": "#ffffff", "weight": 800},
+                "userid":    {"background": "#27ae60", "foreground": "#ffffff", "weight": 800},
+                "config":    {"background": "#d35400", "foreground": "#ffffff", "weight": 800},
+                "eeprom":    {"background": "#f39c12", "foreground": "#ffffff", "weight": 800},
+                "comment":   {"foreground": "#7f8c8d"},
+                "gap_style": {"foreground": "#95a5a6", "weight": 800}
+            }
+
+        for name, attrs in tags.items():
+            tag = Gtk.TextTag(name=name)
+            if "background" in attrs:
+                tag.set_property("background", attrs["background"])
+            if "foreground" in attrs:
+                tag.set_property("foreground", attrs["foreground"])
+            if "weight" in attrs:
+                tag.set_property("weight", attrs["weight"])
+            tag_table.add(tag)
+
+        self.hex_scroll.add(self.hex_view)
+        hex_container.pack_start(self.hex_scroll, True, True, 0)
+        self.hex_frame.add(hex_container)
+
+        # ---------------------------------------------------------
+        # Integrated Details Pane
+        # ---------------------------------------------------------
+
+        self.details_scroll = Gtk.ScrolledWindow()
+        self.details_scroll.set_policy(
+            Gtk.PolicyType.AUTOMATIC,
+            Gtk.PolicyType.AUTOMATIC
+        )
+        self.details_scroll.set_min_content_height(120)
+        self.details_scroll.set_no_show_all(True)
+
+        self.details_view = Gtk.TextView()
+        self.details_view.set_editable(False)
+        self.details_view.set_cursor_visible(False)
+        self.details_view.set_wrap_mode(Gtk.WrapMode.WORD)
+
+        self.details_buffer = self.details_view.get_buffer()
+        self.details_buffer.set_text("(no details)")
+
+        self.details_scroll.add(self.details_view)
+
+        # ---------------------------------------------------------
         # Add layouts to main Window
         # ---------------------------------------------------------
 
         self.layout.pack_start(self.row1_layout, False, False, 0)
+        self.layout.pack_start(self.hex_frame, True, True, 0)
         self.layout.pack_start(self.row2_layout, False, False, 0)
         self.layout.pack_start(self.row3_layout, False, False, 0)
         self.layout.pack_start(self.status_layout, False, False, 0)
+        self.layout.pack_start(self.details_scroll, False, False, 0)
 
         self.add(self.layout)
 
@@ -266,11 +427,15 @@ class MainWindow(Gtk.Window):
         # Try to connect automatically
         self.prog.connect()
 
-    def make_image_button(self, icon_name, tooltip, callback):
-        button = Gtk.Button.new_from_icon_name(
-            icon_name,
-            Gtk.IconSize.BUTTON
-        )
+    def make_image_button(self, icon_name, label, tooltip, callback):
+        """Create a button with a symbolic icon and text label."""
+        button = Gtk.Button()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        image = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.BUTTON)
+        box.pack_start(image, False, False, 0)
+        lbl = Gtk.Label(label=label)
+        box.pack_start(lbl, False, False, 0)
+        button.add(box)
         button.set_tooltip_text(tooltip)
         button.connect("clicked", callback)
         return button
@@ -347,6 +512,9 @@ class MainWindow(Gtk.Window):
         )
 
         self.update_active("file", True)
+        
+        # Load and display in HEX viewer
+        self.update_hex_view(self.source_file)
 
         if self.verbosity:
             print(f"File chosen: {self.source_file}")
@@ -425,23 +593,41 @@ class MainWindow(Gtk.Window):
         self.prog.set_target_power(is_active)
 
     def status_popup_cb(self, *args):
-        popup = StatusPopup(self.status_msg)
-        popup.show_all()
+        is_visible = self.details_scroll.get_visible()
+        if is_visible:
+            self.details_scroll.hide()
+            self.status_btn.set_label("Details")
+        else:
+            self.details_scroll.show()
+            self.status_btn.set_label("Hide Details")
 
     def status(self, msg, details="", colour="green"):
         self.status_label.set_text("Status: " + msg)
         self.status_msg = details
+        self.details_buffer.set_text(details or "(no details)")
 
-        colors = {
-            "red": "#ffcccc",
-            "green": "#ccffcc",
-            "yellow": "#ffffcc"
-        }
+        if self.is_dark:
+            colors = {
+                "red":    {"bg": "#641e16", "fg": "#f5b7b1"},
+                "green":  {"bg": "#1e4d2b", "fg": "#abebc6"},
+                "yellow": {"bg": "#4d4119", "fg": "#f9e79f"}
+            }
+            default = {"bg": "#2c2c2c", "fg": "#cccccc"}
+        else:
+            colors = {
+                "red":    {"bg": "#ffcccc", "fg": "#2c0b0b"},
+                "green":  {"bg": "#ccffcc", "fg": "#0b2c0b"},
+                "yellow": {"bg": "#ffffcc", "fg": "#2c2c0b"}
+            }
+            default = {"bg": "#ffffff", "fg": "#000000"}
+
+        scheme = colors.get(colour, default)
 
         css = Gtk.CssProvider()
         css_data = f"""
         label {{
-            background-color: {colors.get(colour, "#ffffff")};
+            background-color: {scheme['bg']};
+            color: {scheme['fg']};
             padding: 5px;
         }}
         """
@@ -469,41 +655,130 @@ class MainWindow(Gtk.Window):
         self.stop_btn.set_sensitive(device_ready)
 
 
-class StatusPopup(Gtk.Window):
+    def hex_query_tooltip_cb(self, widget, x, y, keyboard_tip, tooltip):
+        """Show a floating tooltip describing the memory region under the cursor."""
+        if keyboard_tip:
+            return False
+        # Convert widget coords to buffer coords
+        bx, by = widget.window_to_buffer_coords(Gtk.TextWindowType.WIDGET, x, y)
+        result = widget.get_iter_at_location(bx, by)
+        # get_iter_at_location returns (bool, iter) in GTK 3.20+
+        if isinstance(result, tuple):
+            over_text, text_iter = result
+            if not over_text:
+                return False
+        else:
+            text_iter = result
 
-    def __init__(self, message):
-        super().__init__(title="Dwarf: Status Messages")
+        offset = text_iter.get_offset()
+        phys_addr = self.hex_addr_map.get(offset)
+        if phys_addr is None:
+            return False
 
-        self.set_border_width(10)
-        self.set_default_size(500, 250)
+        region_name, _ = get_address_info(phys_addr)
+        if region_name:
+            tooltip.set_text(f"0x{phys_addr:06X} — {region_name}")
+        else:
+            tooltip.set_text(f"0x{phys_addr:06X} — Program Memory")
+        return True
 
-        layout = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=10
-        )
+    def update_hex_view(self, filepath):
+        if not filepath or not os.path.isfile(filepath):
+            self.hex_view_buffer.set_text("No HEX file loaded.")
+            self.hex_addr_map = {}
+            return
 
-        text_view = Gtk.TextView()
-        text_view.set_editable(False)
-        text_view.set_cursor_visible(False)
-        text_view.set_wrap_mode(Gtk.WrapMode.WORD)
+        memory = parse_intel_hex(filepath)
+        if not memory:
+            self.hex_view_buffer.set_text("Empty or invalid HEX file.")
+            self.hex_addr_map = {}
+            return
 
-        buffer = text_view.get_buffer()
-        buffer.set_text(message or "(no details)")
+        addresses = sorted(memory.keys())
+        if not addresses:
+            self.hex_view_buffer.set_text("No data in HEX file.")
+            self.hex_addr_map = {}
+            return
 
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(
-            Gtk.PolicyType.AUTOMATIC,
-            Gtk.PolicyType.AUTOMATIC
-        )
-        scroll.add(text_view)
+        min_addr = (addresses[0] // 16) * 16
+        max_addr = ((addresses[-1] // 16) + 1) * 16
 
-        layout.pack_start(scroll, True, True, 0)
+        self.hex_view_buffer.set_text("")
+        self.hex_addr_map = {}
 
-        close_btn = Gtk.Button(label="Close")
-        close_btn.connect("clicked", lambda *_: self.destroy())
+        addr = min_addr
+        in_gap = False
+        gap_start = 0
 
-        layout.pack_end(close_btn, False, False, 0)
-        self.add(layout)
+        self.hex_view.set_sensitive(False)
+
+        while addr < max_addr:
+            has_data = any((addr + i) in memory for i in range(16))
+
+            if not has_data:
+                if not in_gap:
+                    in_gap = True
+                    gap_start = addr
+                addr += 16
+                continue
+
+            if in_gap:
+                gap_len = addr - gap_start
+                gap_iter = self.hex_view_buffer.get_end_iter()
+                self.hex_view_buffer.insert_with_tags_by_name(
+                    gap_iter,
+                    f"... [GAP: {gap_len} (0x{gap_len:X}) bytes] ...\n",
+                    "gap_style"
+                )
+                in_gap = False
+
+            row_iter = self.hex_view_buffer.get_end_iter()
+            self.hex_view_buffer.insert(row_iter, f"0x{addr:06X}:  ")
+
+            for i in range(16):
+                byte_addr = addr + i
+                reg_name, tag_name = get_address_info(byte_addr)
+
+                if byte_addr in memory:
+                    text = f"{memory[byte_addr]:02X}"
+                else:
+                    text = ".."
+
+                if i == 7:
+                    spacing = "  "
+                else:
+                    spacing = " "
+
+                # Record buffer offset -> physical address for each char of the hex pair
+                cur_offset = self.hex_view_buffer.get_end_iter().get_offset()
+                for ch_idx in range(len(text)):
+                    self.hex_addr_map[cur_offset + ch_idx] = byte_addr
+
+                word_iter = self.hex_view_buffer.get_end_iter()
+                if tag_name:
+                    self.hex_view_buffer.insert_with_tags_by_name(
+                        word_iter,
+                        text + spacing,
+                        tag_name
+                    )
+                else:
+                    self.hex_view_buffer.insert(word_iter, text + spacing)
+
+            end_iter = self.hex_view_buffer.get_end_iter()
+            self.hex_view_buffer.insert(end_iter, "\n")
+
+            addr += 16
+
+        if in_gap:
+            gap_len = max_addr - gap_start
+            gap_iter = self.hex_view_buffer.get_end_iter()
+            self.hex_view_buffer.insert_with_tags_by_name(
+                gap_iter,
+                f"... [GAP: {gap_len} (0x{gap_len:X}) bytes] ...\n",
+                "gap_style"
+            )
+
+        self.hex_view.set_sensitive(True)
 
 
 class PicKit:
@@ -737,6 +1012,15 @@ class PicKit:
 
         output = self._run_command(opts)
         self.parent.status("PIC read complete", output, "green")
+        if "Operation Succeeded" in output or "Read Succeeded" in output or not output.startswith("Error"):
+            self.parent.source_file = os.path.abspath(hexfile)
+            self.parent.ready["file"] = True
+            basename = os.path.basename(hexfile)
+            self.parent.file_label.set_text(basename)
+            self.parent.file_label.set_tooltip_text(self.parent.source_file)
+            self.parent.set_title(f"Dwarf {VERSION}: {basename}")
+            self.parent.update_active("file", True)
+            self.parent.update_hex_view(hexfile)
 
     def erase(self):
         if not self.device:
