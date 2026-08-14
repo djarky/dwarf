@@ -1,4 +1,8 @@
-# DWARF: A Modern GUI for pk2cmd in Linux
+# DWARF2026: A Modern restyled GUI for pk2cmd in Linux
+
+## Screenshot
+
+![DWARF main window](doc/screenshot.png)
 
 Dwarf is a graphical interface for `pk2cmd`, designed to program Microchip PIC microcontrollers using the Microchip PICkit 2 programmer.
 
