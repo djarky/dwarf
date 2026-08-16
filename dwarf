@@ -15,7 +15,12 @@
 import gi
 gi.require_version("Gtk", "3.0")
 
-from gi.repository import Gtk, Gdk
+from gi.repository import Gtk, Gdk, GLib
+from urllib.parse import unquote, urlparse
+import urllib.request
+import json
+import stat
+import threading
 from subprocess import Popen, PIPE
 import os
 import sys
@@ -279,6 +284,13 @@ class MainWindow(Gtk.Window):
         self.blank_btn.set_sensitive(False)
         self.row3_layout.pack_start(self.blank_btn, True, True, 0)
 
+        self.ptg_btn = self.make_image_button(
+            "drive-removable-media-symbolic", "To-Go",
+            "Send Programmer-To-Go Image", self.ptg_cb
+        )
+        self.ptg_btn.set_sensitive(False)
+        self.row3_layout.pack_start(self.ptg_btn, True, True, 0)
+
         self.run_btn = self.make_image_button(
             "media-playback-start-symbolic", "Run",
             "Run PIC", self.run_cb
@@ -337,6 +349,11 @@ class MainWindow(Gtk.Window):
         self.hex_view.set_monospace(True)
         self.hex_view.set_has_tooltip(True)
         self.hex_view.connect("query-tooltip", self.hex_query_tooltip_cb)
+
+        # Allow dropping HEX files directly onto the text area
+        self.hex_view.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
+        self.hex_view.drag_dest_add_uri_targets()
+        self.hex_view.connect("drag-data-received", self.on_drag_data_received)
 
         self.hex_view_buffer = self.hex_view.get_buffer()
         self.hex_view_buffer.set_text("No HEX file loaded.")
@@ -426,6 +443,25 @@ class MainWindow(Gtk.Window):
 
         # Try to connect automatically
         self.prog.connect()
+
+        # Drag and Drop support for HEX files
+        self.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
+        self.drag_dest_add_uri_targets()
+        self.connect("drag-data-received", self.on_drag_data_received)
+
+    def on_drag_data_received(self, widget, drag_context, x, y, data, info, time):
+        uris = data.get_uris()
+        if uris:
+            for uri in uris:
+                parsed = urlparse(uri)
+                if parsed.scheme == 'file':
+                    filepath = unquote(parsed.path)
+                    if filepath.lower().endswith('.hex'):
+                        self.set_file(filepath)
+                        break
+            Gtk.drag_finish(drag_context, True, False, time)
+        else:
+            Gtk.drag_finish(drag_context, False, False, time)
 
     def make_image_button(self, icon_name, label, tooltip, callback):
         """Create a button with a symbolic icon and text label."""
@@ -574,6 +610,18 @@ class MainWindow(Gtk.Window):
     def blank_cb(self, *args):
         self.prog.blank_check()
 
+    def ptg_cb(self, *args):
+        if not self.source_file:
+            self.status("No HEX file selected", "", "red")
+            return
+
+        if not os.path.isfile(self.source_file):
+            self.status("HEX file not found", self.source_file, "red")
+            self.update_active("file", False)
+            return
+
+        self.prog.ptg(self.source_file)
+
     def run_cb(self, *args):
         self.prog.run()
 
@@ -605,6 +653,12 @@ class MainWindow(Gtk.Window):
         self.status_label.set_text("Status: " + msg)
         self.status_msg = details
         self.details_buffer.set_text(details or "(no details)")
+
+        # Automatically scroll to the bottom of the details view so the user
+        # can see the actual result, not just the pk2cmd copyright boilerplate
+        end_iter = self.details_buffer.get_end_iter()
+        mark = self.details_buffer.create_mark(None, end_iter, False)
+        self.details_view.scroll_mark_onscreen(mark)
 
         if self.is_dark:
             colors = {
@@ -638,7 +692,11 @@ class MainWindow(Gtk.Window):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
-        self.status_btn.set_sensitive(bool(details))
+        # Allow hiding the pane even if details are empty
+        if self.details_scroll.get_visible():
+            self.status_btn.set_sensitive(True)
+        else:
+            self.status_btn.set_sensitive(bool(details))
 
     def update_active(self, reason, value):
         self.ready[reason] = value
@@ -651,6 +709,7 @@ class MainWindow(Gtk.Window):
         self.read_btn.set_sensitive(device_ready)
         self.erase_btn.set_sensitive(device_ready)
         self.blank_btn.set_sensitive(device_ready)
+        self.ptg_btn.set_sensitive(device_ready and file_ready)
         self.run_btn.set_sensitive(device_ready)
         self.stop_btn.set_sensitive(device_ready)
 
@@ -789,6 +848,49 @@ class PicKit:
         self.parent = parent
         self.device = ""
 
+    def install_pk2cmd(self):
+        def _download_thread():
+            try:
+                url = "https://api.github.com/repos/jaka-fi/pk2cmd/releases/latest"
+                req = urllib.request.Request(url, headers={'User-Agent': 'Dwarf-App'})
+                with urllib.request.urlopen(req) as response:
+                    data = json.loads(response.read().decode())
+                
+                download_url = None
+                for asset in data.get("assets", []):
+                    if asset.get("name", "").endswith(".AppImage"):
+                        download_url = asset.get("browser_download_url")
+                        break
+                        
+                if not download_url:
+                    GLib.idle_add(self.parent.status, "AppImage not found in release", "", "red")
+                    return
+                    
+                GLib.idle_add(self.parent.status, "Downloading pk2cmd AppImage...", download_url, "yellow")
+                
+                bin_dir = os.path.expanduser("~/.local/bin")
+                os.makedirs(bin_dir, exist_ok=True)
+                target_path = os.path.join(bin_dir, "pk2cmd")
+                
+                if bin_dir not in os.environ.get("PATH", ""):
+                    os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+                
+                urllib.request.urlretrieve(download_url, target_path)
+                
+                st = os.stat(target_path)
+                os.chmod(target_path, st.st_mode | stat.S_IEXEC)
+                
+                GLib.idle_add(self.parent.status, "Install Succeeded. Reconnecting...", "", "green")
+                GLib.timeout_add(1000, self.connect)
+                
+            except Exception as e:
+                GLib.idle_add(self.parent.status, "Installation Failed", str(e), "red")
+
+        self.parent.status("Starting installation...", "", "yellow")
+        t = threading.Thread(target=_download_thread)
+        t.daemon = True
+        t.start()
+
     def detect_programmer(self):
         """Scans for connected PICkit programmers and returns the name/type."""
         if shutil.which(self.cmd) is None:
@@ -827,11 +929,25 @@ class PicKit:
                 "red"
             )
             self.parent.update_active("device", False)
-            self.show_error(
-                "pk2cmd Required!",
-                "The pk2cmd command line program could not be found.\n\n"
-                "Install pk2cmd and make sure it is available in PATH."
+            dialog = Gtk.MessageDialog(
+                transient_for=self.parent,
+                flags=Gtk.DialogFlags.MODAL,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.NONE,
+                text="pk2cmd Required!"
             )
+            dialog.format_secondary_text(
+                "The pk2cmd command line program could not be found.\n\n"
+                "Would you like to automatically download and install the latest AppImage from GitHub to ~/.local/bin?"
+            )
+            dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+            dialog.add_button("Install", Gtk.ResponseType.ACCEPT)
+            
+            response = dialog.run()
+            dialog.destroy()
+            
+            if response == Gtk.ResponseType.ACCEPT:
+                self.install_pk2cmd()
             return False
 
         prog_type = self.detect_programmer()
@@ -967,6 +1083,32 @@ class PicKit:
             self.parent.status("Program Succeeded", output, "green")
         else:
             self.parent.status("Program Failed", output, "red")
+
+    def ptg(self, hexfile):
+        if not self.device:
+            self.parent.status("No PIC detected", "", "red")
+            return
+
+        opts = [
+            "-P" + self.device,
+            "-F" + hexfile,
+            "-M",
+            "-G"
+        ]
+
+        voltage_val = self.parent.get_voltage()
+        if voltage_val:
+            opts.append(f"-A{voltage_val}")
+            
+        if self.parent.is_target_power_on():
+            opts.append("-T")
+
+        output = self._run_command(opts)
+
+        if "Program Succeeded" in output or "Operation Succeeded" in output:
+            self.parent.status("PTG Setup Succeeded", output, "green")
+        else:
+            self.parent.status("PTG Setup Failed", output, "red")
 
     def verify(self, hexfile):
         if not self.device:
