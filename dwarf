@@ -350,10 +350,9 @@ class MainWindow(Gtk.Window):
         self.hex_view.set_has_tooltip(True)
         self.hex_view.connect("query-tooltip", self.hex_query_tooltip_cb)
 
-        # Allow dropping HEX files directly onto the text area
-        self.hex_view.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
-        self.hex_view.drag_dest_add_uri_targets()
-        self.hex_view.connect("drag-data-received", self.on_drag_data_received)
+        # Disable the TextView's built-in text DnD so drop events
+        # propagate up to hex_frame instead.
+        self.hex_view.drag_dest_unset()
 
         self.hex_view_buffer = self.hex_view.get_buffer()
         self.hex_view_buffer.set_text("No HEX file loaded.")
@@ -395,6 +394,15 @@ class MainWindow(Gtk.Window):
         hex_container.pack_start(self.hex_scroll, True, True, 0)
         self.hex_frame.add(hex_container)
 
+        # Drop target on the Frame (not the TextView, which conflicts)
+        self.hex_frame.drag_dest_set(
+            Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY
+        )
+        self.hex_frame.drag_dest_add_uri_targets()
+        self.hex_frame.connect("drag-data-received", self.on_drag_data_received)
+        self.hex_frame.connect("drag-motion", self.on_hex_drag_motion)
+        self.hex_frame.connect("drag-leave", self.on_hex_drag_leave)
+
         # ---------------------------------------------------------
         # Integrated Details Pane
         # ---------------------------------------------------------
@@ -405,7 +413,6 @@ class MainWindow(Gtk.Window):
             Gtk.PolicyType.AUTOMATIC
         )
         self.details_scroll.set_min_content_height(120)
-        self.details_scroll.set_no_show_all(True)
 
         self.details_view = Gtk.TextView()
         self.details_view.set_editable(False)
@@ -441,6 +448,11 @@ class MainWindow(Gtk.Window):
 
         self.show_all()
 
+        # Hide the details pane after show_all() so children are
+        # already "shown" internally — toggling show()/hide() on
+        # the container then works correctly.
+        self.details_scroll.hide()
+
         # Try to connect automatically
         self.prog.connect()
 
@@ -462,6 +474,34 @@ class MainWindow(Gtk.Window):
             Gtk.drag_finish(drag_context, True, False, time)
         else:
             Gtk.drag_finish(drag_context, False, False, time)
+
+        # Reset visual feedback after drop
+        self._reset_hex_frame_style()
+
+    def on_hex_drag_motion(self, widget, drag_context, x, y, time):
+        """Highlight the HEX viewer frame green while a file hovers over it."""
+        css = Gtk.CssProvider()
+        if self.is_dark:
+            css_data = b"frame { border: 2px solid #58d68d; background-color: rgba(88,214,141,0.08); }"
+        else:
+            css_data = b"frame { border: 2px solid #27ae60; background-color: rgba(39,174,96,0.08); }"
+        css.load_from_data(css_data)
+        ctx = self.hex_frame.get_style_context()
+        # Remove previous highlight provider if present
+        if hasattr(self, '_hex_drag_css'):
+            ctx.remove_provider(self._hex_drag_css)
+        self._hex_drag_css = css
+        ctx.add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        return True
+
+    def on_hex_drag_leave(self, widget, drag_context, time):
+        """Remove the green highlight when the drag leaves."""
+        self._reset_hex_frame_style()
+
+    def _reset_hex_frame_style(self):
+        if hasattr(self, '_hex_drag_css'):
+            self.hex_frame.get_style_context().remove_provider(self._hex_drag_css)
+            del self._hex_drag_css
 
     def make_image_button(self, icon_name, label, tooltip, callback):
         """Create a button with a symbolic icon and text label."""
