@@ -4,9 +4,9 @@
 
 ![DWARF main window](doc/screenshot.png)
 
-Dwarf is a graphical interface for `pk2cmd`, designed to program Microchip PIC microcontrollers using the Microchip PICkit 2 programmer.
+Dwarf is a graphical interface for `pk2cmd`, designed to program Microchip PIC microcontrollers using the Microchip Pickit programmer.
 
-Originally a simple Python script, Dwarf has been heavily modernized in **2026** to provide a robust, modern development experience on Linux while retaining its easy-to-use nature. It automates common tasks with the PICkit 2, removing the need to memorize lengthy command-line arguments.
+Originally a simple Python script, Dwarf has been heavily modernized in **2026** to provide a robust, modern development experience on Linux while retaining its easy-to-use nature. It automates common tasks with the PICkit 2 and Pickit 3 , removing the need to memorize lengthy command-line arguments.
 
 ## 2026 Modernization Updates
 
